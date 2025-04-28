@@ -46,7 +46,7 @@ data_dir = args.data_dir # parent folder containing train/, valid/, test/, test/
 output_dir = args.out_path
 selected_class = args.finetune_class
 train_yolo = True # if True, train YOLO at the end
-train_ratio = 0.05 # 0.9 = 90% train and 10% val
+train_ratio = 0.85 # 0.9 = 90% train and 10% val
 weights = args.weights # path to YOLO weights, e.g. 'yolo11m.pt'
 epochs = args.epochs # number of epochs to train for
 
@@ -132,7 +132,7 @@ def gather_split_data():
     Returns a combined list of:
       (img_path, bboxes, width, height, scene_name).
     """
-    splits_to_gather = ["test"]
+    splits_to_gather = ["train", "valid", "test"]
     all_items = []
 
     for split_name in splits_to_gather:
