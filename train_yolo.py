@@ -13,20 +13,52 @@ from ultralytics import YOLO
 ################################################################################
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--out_path', default="/cluster/work/projects/ec12/ec-eirikeg/yolo_out")    
+parser.add_argument('--out_path', default="/cluster/work/projects/ec12/ec-eirikeg/yolo_out")
+parser.add_argument('--data_dir', default="/cluster/work/projects/ec12/ec-eirikeg/data/soccernet",
+                    help='Path to the folder containing train/, valid/, test/')
+parser.add_argument('--weights', default=None)
+parser.add_argument('--finetune_class',
+                    default="ball",
+                    choices=["player", "ball", "all"],
+                    help='Which class(es) to keep: player, ball or both (all)')
+parser.add_argument('--epochs',
+                    type=int,
+                    default=50,
+                    help='Number of epochs to train for')
+parser.add_argument('--iou',
+                    type=float,
+                    default=0.5,
+                    help='IoU threshold passed to model.train()')
+parser.add_argument('--imagesz',
+                    default="640,1280",
+                    help='Training image size(s). Either a single int or a comma-separated list (e.g. "640,1280")')
+
 
 args = parser.parse_args()
-data_dir = "/cluster/work/projects/ec12/ec-eirikeg/data/soccernet" # parent folder containing train/, valid/, test/, test/
+
+# Parse --imagesz -> int | list[int]
+if "," in args.imagesz:
+    imgsz = [int(sz) for sz in args.imagesz.split(",") if sz.strip()]
+else:
+    imgsz = int(args.imagesz)
+    
+data_dir = args.data_dir # parent folder containing train/, valid/, test/, test/
 output_dir = args.out_path
-train_ratio = 0.90 # 0.9 = 90% train and 10% val
-train_yolo = True # if True, train YOLO at the end   
-selected_class = "ball" # "player" or "ball"
+selected_class = args.finetune_class
+train_yolo = True # if True, train YOLO at the end
+train_ratio = 0.05 # 0.9 = 90% train and 10% val
+weights = args.weights # path to YOLO weights, e.g. 'yolo11m.pt'
+epochs = args.epochs # number of epochs to train for
 
 
 # Label filtering: set to 1 for player, 0 for ball.
 # Note: even though in the original mapping player was 0 and ball 1, for filtering we use:
 #       1 --> player, 0 --> ball.
-FILTER_LABEL = 1 if selected_class == "player" else 0
+FILTER_LABEL = {
+    "player": 1,
+    "ball":   0,
+    "all":    None,
+}[selected_class]
 
 ################################################################################
 # HELPER FUNCTIONS
@@ -47,11 +79,8 @@ def parse_labels_json(json_path: str, images_dir: str):
     images_info = {img['image_id']: img for img in data['images']}
     category_map = {cat['id']: cat['name'] for cat in data['categories']}
 
-    # Define the allowed label based on FILTER_LABEL:
-    # if FILTER_LABEL is 1, then allow "player"; if 0, then allow "ball".
-    allowed_label = "player" if FILTER_LABEL == 1 else "ball"
-
     image_to_bboxes = {}
+    label_to_id = {"player": 0, "ball": 1}
 
     for ann in data['annotations']:
         bbox_img = ann.get('bbox_image')
@@ -61,13 +90,16 @@ def parse_labels_json(json_path: str, images_dir: str):
         image_id = ann['image_id']
         cat_id = ann['category_id']
         cat_name = category_map.get(cat_id, "").lower()
-
-        # Only keep annotations that match the allowed label.
-        if cat_name != allowed_label:
-            continue
-
-        # Since we're filtering to one class, re-map the class id to 0.
-        class_id = 0
+        
+        if FILTER_LABEL is not None:
+            allowed_label = "player" if FILTER_LABEL == 1 else "ball"
+            if cat_name != allowed_label:
+                continue
+            class_id = 0
+        else:
+            if cat_name not in label_to_id:
+                continue
+            class_id = label_to_id[cat_name]
 
         x = bbox_img['x']
         y = bbox_img['y']
@@ -100,7 +132,7 @@ def gather_split_data():
     Returns a combined list of:
       (img_path, bboxes, width, height, scene_name).
     """
-    splits_to_gather = ["train", "valid", "test"]
+    splits_to_gather = ["test"]
     all_items = []
 
     for split_name in splits_to_gather:
@@ -223,15 +255,18 @@ save_yolo_labels(val_data, 'val', output_dir)
 
 # 5. Write data.yaml
 # When filtering, we only have one class; update the names accordingly.
-allowed_label_name = "player" if FILTER_LABEL == 1 else "ball"
 data_yaml_path = os.path.join(output_dir, "data.yaml")
+if selected_class == "all":
+    class_block = "names:\n  0: player\n  1: ball\n"
+else:
+    allowed_label_name = "player" if FILTER_LABEL == 1 else "ball"
+    class_block = f"names:\n  0: {allowed_label_name}\n"
+
 data_yaml = f"""# YOLO dataset config
 train: {output_dir}/images/train
-val: {output_dir}/images/val
+val:   {output_dir}/images/val
 
-names:
-  0: {allowed_label_name}
-"""
+{class_block}"""
 with open(data_yaml_path, 'w') as f:
     f.write(data_yaml)
 
@@ -247,11 +282,11 @@ if train_yolo:
 
     # YOLOv8 automatically prints a progress bar, saves the best model, etc.
     # 'save_period=1' means it will save an extra checkpoint each epoch. 
-    model = YOLO("/projects/ec12/eirikeg/training_results/yolo/balldetection3/weights/last.pt")  # or 'yolo11m.pt', etc.
+    model = YOLO(weights) if weights else YOLO('yolo11m.pt')  # or 'yolo11m.pt', etc.
     results = model.train(
         iou=0.5,
         data=data_yaml_path,
-        epochs=50,
+        epochs=epochs,
         imgsz=1280,
         batch=0.9,        # auto-batch
         # pretrained=True, # use pretrained backbone

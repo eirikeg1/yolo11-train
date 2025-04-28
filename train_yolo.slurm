@@ -37,7 +37,7 @@ conda info --envs
 
 conda activate /fp/homes01/u01/ec-eirikeg/.conda/envs/dribling-detection
 
-python train_yolo.py --out_path "${SCRATCH}"
+python train_yolo.py --out_path "${SCRATCH}" $@
 
 
 
